@@ -1,0 +1,280 @@
+**目的**
+- 既存の `python_questions_conditionals.json`, `python_questions_loops.json`, `python_questions_functions.json` に含まれる各問題に対して、1:1（原則）で "質問中心" の knowledge オブジェクトを定義する。
+- 知識間のあいまいな重複をなくし、学習・評価フロー上で「教えていないのに解ける」「教えたのに解けない」が発生しないように設計する。
+
+**設計方針（要点）**
+- 問題→知識の原則: 各問題は必ず `primary_knowledge_id` を持ち、テストフローではその primary 知識のみを更新対象とする（複数知識に関連する問題は "primary" と "secondary" を明示する）。
+- キーワード管理: 各 knowledge は `primary_keywords`（厳密マッチに使う）と `secondary_keywords`（補助）を持つ。パラフレーズ判定での昇格は `primary_keywords` の閾値を満たした場合のみ許可する。
+- 閾値: `primary_required_count` は整数（例: 1〜3）。デフォルトは 1（基本的概念）または 2（複合条件）。
+- 自動採点と昇格ルール:
+  - code 問: 学生のコードがオートグレーダで正と判定された場合にのみ knowledge の `partial` / `mastered` を与える（パラフレーズのみでは不可）。
+  - short / mc 問: 正答（出力一致や必須トークンの出現）で `partial`、追試で確実に正解した場合に `mastered`。
+  - chat（学習）フロー: パラフレーズや説明は学習フローで補助的に評価するが、テストフローでは上記厳格ルールを適用する。
+- 依存関係: 必要に応じて `prerequisites` を設定する（例: `if` の基礎がないと `nested if` は教えても解けない設計にする）。
+- top-k 適用: チャット側の広域更新や解析では候補上位 k=2 を検討するが、テストフローでは `primary_knowledge_id` のみ使う。
+
+---
+
+**命名規則**
+- 知識 ID の接頭辞は `py_cond_`, `py_loop_`, `py_func_` を使用。
+- 各 ID は質問の `qid` をベースに `py_cond_q01` のように命名して、一意性を保証する。
+
+例: 問題 `cond_q06` に対応する知識は `py_cond_cond_q06` では冗長なので、`py_cond_q06_grade` のように可読性を持たせる。
+
+---
+
+**スキーマ（knowledge オブジェクト）**
+- id: string （ex: `py_cond_q06_grade`）
+- title: string （短い説明）
+- description: string （学習目標）
+- primary_keywords: [string] （昇格判定で厳密にマッチを要する語）
+- secondary_keywords: [string] （補助）
+- primary_required_count: int （primary_keywords から何個以上マッチで許可するか）
+- question_ids: [string] （この知識に紐づく qid、原則は 1 件）
+- qtype: one of `short`|`mc`|`code`（テスト昇格ルールに使用）
+- autograde_hints: object （questions の autograde_hints を引用）
+- prerequisites: [string] （他の knowledge id）
+- initial_mastery: one of `unknown`|`none`|`partial`|`mastered`（初期値: `none`）
+
+---
+
+**現在の質問→知識マッピング（提案）**
+- 注意: 以下は各問題に対する "質問中心" の知識定義草案。各 knowledge の `primary_keywords` は、オートグレーダとパラフレーズ判定で誤判定が出にくいように設計してあります。必要に応じ微調整してください。
+
+1) Conditionals（ファイル: `python_questions_conditionals.json`）
+- cond_q01 -> id: `py_cond_q01_compare_ops`
+  - title: 比較演算子の意味と例
+  - description: `==, !=, <, >` の意味を説明し、簡単な例を示せる。
+  - primary_keywords: ["==","!=","<",">"]
+  - secondary_keywords: ["等しい","真","False","比較"]
+  - primary_required_count: 1
+  - question_ids: ["cond_q01"]
+  - qtype: short
+  - autograde_hints: copy from question
+- cond_q02 -> id: `py_cond_q02_if_output`
+  - title: 単純 if の実行結果
+  - primary_keywords: ["print('A')","3 > 2","A"]
+  - qtype: mc
+  - primary_required_count: 1
+- cond_q03 -> id: `py_cond_q03_indent`
+  - title: インデントの役割
+  - primary_keywords: ["インデント","ブロック"]
+  - qtype: short
+- cond_q04 -> id: `py_cond_q04_logical_shortcircuit`
+  - title: 論理演算子と短絡評価
+  - primary_keywords: ["and","or","短絡"], primary_required_count:1
+- cond_q05 -> id: `py_cond_q05_negation_example`
+  - title: not と複合条件の読み替え
+  - primary_keywords: ["not","and","b < 10","a > 0"]
+- cond_q06 -> id: `py_cond_q06_grade_function`
+  - title: grade(score) の条件分岐実装
+  - primary_keywords: ["if","elif","return","score >= 90","score >= 70"], primary_required_count:2
+  - qtype: code
+  - autograde_rule: static token check + unit tests (推奨)
+- cond_q07 -> id: `py_cond_q07_max3`
+  - title: 3つの値の最大値を返す実装（if/elif）
+  - primary_keywords: ["if a >= b","elif b >= a","return c"], primary_required_count:2
+  - qtype: code
+- cond_q08 -> id: `py_cond_q08_indent_fix`
+  - title: インデント修正（バグ修正）
+  - primary_keywords: ["if x > 10:","print('big')","    print"], primary_required_count:2
+  - qtype: code
+- cond_q09 -> id: `py_cond_q09_sign_function`
+  - title: sign(x) の入れ子 if 実装
+  - primary_keywords: ["if x > 0","elif x < 0","return 'positive'"], qtype: code, primary_required_count:2
+- cond_q10 -> id: `py_cond_q10_filter_positive`
+  - title: リストから正の数を抽出
+  - primary_keywords: ["for x in nums","x > 0","return ["], qtype: code
+- cond_q11 -> id: `py_cond_q11_read_int_try`
+  - title: try/except を使った入力処理
+  - primary_keywords: ["try:","except","int("], qtype: code
+- cond_q12 -> id: `py_cond_q12_weekday_label`
+  - title: インデックスで曜日名を返す
+  - primary_keywords: ["days = [","if 0 <= n","return days[n]"], qtype: code
+- cond_q13 -> id: `py_cond_q13_categorize`
+  - title: 複合条件でカテゴリ分け
+  - primary_keywords: ["age < 18","income > 100000","and"], qtype: code
+- cond_q14 -> id: `py_cond_q14_else_to_elif`
+  - title: else の位置修正（elif に整理）
+  - primary_keywords: ["elif","print('zero')"], qtype: code
+- cond_q15 -> id: `py_cond_q15_exception_vs_branch`
+  - title: 例外処理と条件分岐の使い分け
+  - primary_keywords: ["例外","条件分岐","例"], qtype: short
+- cond_q16 -> id: `py_cond_q16_simplify_logic`
+  - title: 論理式の簡約検討
+  - primary_keywords: ["and","or","not"], qtype: short
+- cond_q17 -> id: `py_cond_q17_cli_sign_app`
+  - title: CLI で複数数値の正/負/ゼロ判定（総合）
+  - primary_keywords: ["input().split()","for n in nums","def sign("], qtype: code
+
+---
+2) Loops（`python_questions_loops.json`）
+- loop_q01 -> `py_loop_q01_for_while_diff`
+  - primary_keywords: ["for","while","イテラブル","条件"]
+- loop_q02 -> `py_loop_q02_range_output` (mc)
+  - primary_keywords: ["range(3)","print(i)","0","1","2"]
+- loop_q03 -> `py_loop_q03_iterable_iterator`
+  - primary_keywords: ["イテラブル","イテレータ","__next__"]
+- loop_q04 -> `py_loop_q04_break_continue`
+  - primary_keywords: ["break","continue"]
+- loop_q05 -> `py_loop_q05_list_comprehension`
+  - primary_keywords: ["[","for x in nums","]","リスト内包"]
+- loop_q06 -> `py_loop_q06_sum_list`
+  - qtype: code, primary_keywords: ["total = 0","for x in nums","total += x","return total"], autograde: token checks + sample tests
+- loop_q07 -> `py_loop_q07_factorial`
+  - qtype: code, primary_keywords: ["while","result *= i","i += 1"]
+- loop_q08 -> `py_loop_q08_filter_even`
+  - qtype: code, primary_keywords: ["x % 2 == 0","for x in items","["], autograde: sample I/O
+- loop_q09 -> `py_loop_q09_upper_words`
+  - qtype: code, primary_keywords: [".upper()","for w in words"]
+- loop_q10 -> `py_loop_q10_flatten`
+  - qtype: code, primary_keywords: ["for row in matrix","for x in row","result.append"], autograde: structural checks
+- loop_q11 -> `py_loop_q11_enumerate`
+  - qtype: code, primary_keywords: ["enumerate","print(i, v)"]
+- loop_q12 -> `py_loop_q12_infinite_debug`
+  - qtype: short/code, primary_keywords: ["while True","break","condition"]
+- loop_q13 -> `py_loop_q13_zip`
+  - qtype: code, primary_keywords: ["zip(","for x, y in zip"]
+- loop_q14 -> `py_loop_q14_generator`
+  - qtype: code, primary_keywords: ["yield","ジェネレータ"], autograde: token + small runtime check
+- loop_q15 -> `py_loop_q15_reverse_list`
+  - qtype: code, primary_keywords: ["insert(0","for x in lst","return res"], forbidden_tokens: ["reverse("]
+- loop_q16 -> `py_loop_q16_optimize`
+  - qtype: short, primary_keywords: ["不要な計算","append","O(n)"]
+- loop_q17 -> `py_loop_q17_even_square_cli`
+  - qtype: code, primary_keywords: ["x % 2 == 0","x*x","input().split()"], autograde: sample tests
+
+---
+3) Functions（`python_questions_functions.json`）
+- func_q01 -> `py_func_q01_function_vs_procedure`
+  - qtype: short, primary_keywords: ["返す","副作用"]
+- func_q02 -> `py_func_q02_default_arg_demo` (mc)
+  - primary_keywords: ["f()","4","x=2"]
+- func_q03 -> `py_func_q03_args_vs_kwargs`
+  - primary_keywords: ["位置引数","キーワード引数"]
+- func_q04 -> `py_func_q04_default_mutable_warning`
+  - primary_keywords: ["可変","共有","デフォルト引数"]
+- func_q05 -> `py_func_q05_docstring`
+  - primary_keywords: ["docstring","Args:","Returns:"]
+- func_q06 -> `py_func_q06_add`
+  - qtype: code, primary_keywords: ["def add","return a + b"]
+- func_q07 -> `py_func_q07_sum_args`
+  - qtype: code, primary_keywords: ["*args","for v in args","total += v"]
+- func_q08 -> `py_func_q08_print_kwargs`
+  - qtype: code, primary_keywords: ["**kwargs","kwargs.items()","print(k, v)"]
+- func_q09 -> `py_func_q09_fib_recursion`
+  - qtype: code, primary_keywords: ["fib(n-1)","fib(n-2)"]
+- func_q10 -> `py_func_q10_map_apply`
+  - qtype: code, primary_keywords: ["f(x)","for x in nums","res.append"], forbidden: ["map("]
+- func_q11 -> `py_func_q11_closure`
+  - qtype: code, primary_keywords: ["def adder","return x + n","return adder"]
+- func_q12 -> `py_func_q12_docstring_greet`
+  - qtype: code, primary_keywords: ["docstring","Args:","Returns:","return 'Hello'"], NOTE: required token mismatch flagged below
+- func_q13 -> `py_func_q13_safe_int`
+  - qtype: code, primary_keywords: ["try:","except ValueError","return None"]
+- func_q14 -> `py_func_q14_timeit_decorator`
+  - qtype: code, primary_keywords: ["time.time()","def wrapper","return wrapper"]
+- func_q15 -> `py_func_q15_partial`
+  - qtype: code, primary_keywords: ["partial","functools"]
+- func_q16 -> `py_func_q16_srp`
+  - qtype: short, primary_keywords: ["単一責任","parse_input"]
+- func_q17 -> `py_func_q17_avg_length`
+  - qtype: code, primary_keywords: ["len(w)","sum(len(w)","if not filtered"], autograde: unit tests
+
+---
+
+**指摘・矛盾点（現状ファイルから確認した項目）**
+1. `func_q12` の `autograde_hints.required_tokens` に `"return 'Hello'"` があるが、`sample_solution` は `"return 'Hello ' + name"` を使っている。`required_tokens` を `"'Hello'"` や `"Hello"` にするか、正規表現で `^return\s+'Hello'` に柔軟にする必要がある。
+2. トークン一致は空白・引用符の差で失敗しやすいので、`required_tokens` は "部分文字列" 基準で短めに設計し、重要語（関数名やキーワード）を中心にする。例: `"for x in nums"` より `"for x in"` を採用すると多少寛容になる。
+3. `loop_q11` の `autograde_hints.required_tokens` に `"print(i"` のように括弧閉じがないトークンがある（許容はできるが明示的に `"print("` の方が良い場合がある）。
+4. `related_knowledge_ids` が複数設定されている総合問題（例: cond_q17, func_q17, loop_q17）は良いが、テストフローでは "primary" を明示しておかないと複数の knowledge が同時に昇格してしまう。設計上、総合問題は primary を 1 つにし、secondary に残りを割り当てる。
+
+---
+
+**干渉を防ぐための運用ルール（実装ガイド）**
+- 問題テンプレート拡張: 各問題に `primary_knowledge_id` と `secondary_knowledge_ids` を追加する。既存の `related_knowledge_ids` は `secondary` に移行し、primary を必ず埋める。
+- テストフロー更新: `/submit_test_answer` の処理は以下で行う:
+  1. 受け取った `qid` から対応する `primary_knowledge_id` を取得
+  2. qtype に応じたオートグレードを実行（code: unit tests or token checks、short: token checks、mc: output regex）
+  3. autograde が合格 -> primary knowledge に `partial`（または `mastered` 条件なら `mastered`）を付与。secondary は原則更新しない。
+  4. autograde が不合格 -> knowledge は更新せず、ヒントを返して再挑戦を促す。
+- 学習チャット側: 会話から得られた説明やパラフレーズは `learning` モードで知識の "confidence" を上げるが、テストフローへの直接的な昇格フラグは与えない（別途テストで確認する）。
+
+---
+
+**推奨：knowledge JSON の初期フィールド例（1 件）**
+{
+  "id": "py_cond_q06_grade",
+  "title": "grade(score) の条件分岐",
+  "description": "スコアに応じて A/B/C/F を返す条件分岐を実装できる",
+  "primary_keywords": ["if","elif","score >= 90","return 'A'"],
+  "secondary_keywords": ["return 'B'","return 'C'","else"],
+  "primary_required_count": 2,
+  "question_ids": ["cond_q06"],
+  "qtype": "code",
+  "autograde_hints": {"required_tokens": ["if","elif","return"], "expected_output_regex": ""},
+  "prerequisites": ["py_cond_q01_compare_ops"],
+  "initial_mastery": "none"
+}
+
+---
+
+**次の作業（提案）**
+1. （即時）今回作成した設計書を確認のうえ、承認いただければ `learning-ui/python_knowledge_template.json` を生成します（全 knowledge オブジェクトを JSON 配列で出力）。
+2. `python_questions_*.json` の各問題に `primary_knowledge_id` フィールドを追記します（自動スクリプトで追加可）。
+3. オートグレーダの簡易実装（token match + sample unit test runner）を作り、`code` 問を安全に採点できるようにします。
+
+---
+
+設計書ドラフトを作成しました。次にどれを実行しますか？
+- A: `python_knowledge_template.json` を生成（私の推奨：まず生成してファイルとして保存します）。
+- B: 各 `python_questions_*.json` に `primary_knowledge_id` を自動で埋めるスクリプトを作成。
+- C: 先にオートグレーダ（簡易）を作る。
+
+希望を短く指定してください（A / B / C）。
+
+---
+
+**エージェントの具体的な動き — 変形問題（variant）による自己発見フロー（設計修正）**
+目的: ユーザが間違えた際に直接正答を与えず、変形問題（variant）を通じてユーザ自身が誤りに気づく運用を採る。エージェントによる自動解答（agent_attempt）は当面実装しない（複雑化回避）。
+
+1) 全体フロー（簡素化）
+  - ユーザに `qid` の問題を提示 → ユーザが回答を提出
+  - サーバ（オートグレーダ）がユーザ解答を自動採点（binary: correct / incorrect）
+    - correct: その `primary_knowledge_id` を `known=true` に設定し、次の問題を返す。
+    - incorrect（初回）: 直接正答は与えず、変形問題（variant）を提示して再挑戦を促す。
+  - ユーザが variant に回答 → サーバで再採点（binary）
+    - correct: `primary_knowledge_id` を `known=true` に設定し次へ
+    - incorrect: 段階的ヒントまたは解説化のオプションを用意（運用で制御）
+
+2) 変形問題の管理
+  - 各問題に `variants` フィールドを追加。variants はテンプレートまたは別問リスト。
+  - 生成ルール: 本質は変えずに、境界値や変数名などを変える。可能であれば 2 種類の variant を用意してランダムまたは誤りに応じて選択。
+
+3) データモデル（簡潔）
+  - question: 必須 `primary_knowledge_id`、任意 `variants`。
+  - knowledge: `known`: boolean（初期 false）、`attempts`: int、`last_result`: 'correct'|'incorrect'|'none'。
+  - ログ: 各提出で (qid, user_id, ts, submission, result, variant_used) を保存。
+
+4) API / エンドポイント（変更）
+  - `/submit_test_answer`:
+    1. 受領 → autograde user answer (binary)
+    2. autograde == correct → set `known=true`, increment attempts, return success + next qid
+    3. autograde == incorrect → increment attempts, return `variant_question` (no agent_attempt)
+  - `/submit_variant_answer`:
+    1. 受領 → autograde variant answer (binary)
+    2. autograde == correct → set `known=true`, return success + next qid
+    3. autograde == incorrect → return failure; optionally return staged hint or ask for retry
+
+5) 表示・応答方針（簡潔）
+  - 不正解時（初回）: 表示は "その回答は正しくありません。類題を出します（variant）。" のみ
+  - variant 提出後: autograde の結果（正解 / 不正解）を返す。エージェントによる "自分が解く" 表示や解答生成は行わない。
+  - ヒントは段階的に公開する（運用で制御）。
+
+6) 運用上の利点と注意点
+  - 利点: システム設計が単純化され、実装とテストが容易になる。ユーザも流れが直感的。
+  - 注意: agent_attempt を廃止するため、ユーザが気づきを得るのは variant + ヒントの設計に依存する。ヒント設計と variant の質が重要。
+
+---
+
+この修正を反映して `python_knowledge_template.json` 生成や問題ファイルの `primary_knowledge_id` 埋めを進められます。次に何を実行しますか？短く選んでください: (A) knowledge JSON 生成 / (B) 各問題へ `primary_knowledge_id` を自動埋め / (C) 簡易オートグレーダ実装。

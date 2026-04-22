@@ -1,0 +1,198 @@
+Python-Tutee（3単元版）詳細設計書
+=================================
+作成日: 2025-11-19
+対象: 大学生向け Python 基礎学習エージェント（python-tutee）
+目的: 1週間後のテストに向け、ユーザが教師役となってエージェントを訓練する逐次学習フロー（3 単元、各単元 3 セッション × 50 分）
+
+設計の要旨
+---------
+- 学習対象を 3 単元に絞る: 1) 条件分岐（Conditionals） 2) 繰り返し処理（Loops：Definite & Indefinite を包含） 3) 関数（Functions：パラメータ・戻り値・再帰的要素を含む）
+- 各単元は 17 問（基礎 5 問 + 応用 12 問）で設計。1 問ずつ順に提示し、ユーザがその問題について“正しい答え（解法・実装）”を与えるまで進めない（逐次 mastery）。
+- 知識更新は question-centric。問題が合格したときのみ、その問題に紐づく knowledge_id に対して理解度更新を行う。チャットでのパラフレーズやコード提示はテスト・フローの自動昇格には使わない。
+
+学習スケジュール
+--------------
+- 各単元: 3 セッション × 50 分（合計 150 分）
+  - セッション1: 基礎概念確認 + 基礎問題（slot 1-5）
+  - セッション2: 応用問題（slot 6-11）中盤（コード作成・応用）
+  - セッション3: 応用問題（slot 12-17）完成 + 総復習
+- セッション運用: UI は 50 分タイマー表示。セッション内で進捗（passed slots）を更新・保存する。
+
+カバーするトピック（10 項目の内訳と配分）
+---------------------------------
+以下 10 項目を 3 単元にマップします。
+- 条件分岐（Unit: Conditionals）でカバー: fundamentals, logical operators, conditionals
+- 繰り返し（Unit: Loops）でカバー: definite loops, indefinite loops, arrays（配列操作をループ問題で扱う）
+- 関数（Unit: Functions）でカバー: function parameters, return values, recursion, (簡単な) object-oriented basics を補助題材として利用（ただし主題は関数）
+
+各単元の学習目標
+----------------
+Unit A: Conditionals
+- 比較演算子、論理演算子の理解
+- if / elif / else 構文の正しい記述
+- ネストや順序の影響を理解しデバッグできる
+
+Unit B: Loops
+- for/while の使い分け、range/enumerate
+- ループでの配列操作（インデックス・スライス）
+- 無限ループ回避と効率的ループ設計
+
+Unit C: Functions
+- 関数定義、位置引数・キーワード引数・デフォルト、*args/**kwargs
+- return の意味、複数戻り値、None
+- 再帰設計の基礎（簡単な再帰問題）、関数設計の基本（純粋関数と副作用）
+
+問題フォーマットとメタデータ
+------------------------
+- ファイル: `python_questions_{unit}.json`（単元ごと分離） 例: `python_questions_conditionals.json`
+- 問題オブジェクトフィールド:
+  - `qid` (string): 一意識別子（例: cond_q01）
+  - `slot_index` (int): 1..17（提示順）
+  - `category` ("basic" | "applied")
+  - `qtype` ("mc" | "short" | "code")
+  - `text` (string): 教師側向け問題文
+  - `sample_solution` (optional): 教師用解答例
+  - `related_knowledge_ids` (list): この問題がカバーする知識 ID 列
+  - `autograde_hints` (dict): {"required_tokens":[], "forbidden_tokens":[], "expected_output_regex": ""}
+  - `max_retries` (int, default 2)
+  - `time_limit_minutes` (optional)
+
+採点ルール（Autograder, 静的）
+--------------------------
+- mc: 文字列比較（大文字小文字を正規化）
+- short: required_tokens の出現 + token overlap threshold
+- code:
+  - required_tokens 出現チェック
+  - 完全一致（教師サンプル）→ コピーとみなし証拠として弱い扱い（再試行要求）
+  - 高類似度（Jaccard token）→ コピー判定の基準を満たせば再試行
+  - 実行は行わない（安全上の理由）
+
+知識更新ポリシー
+----------------
+- テストフロー専用: `passed == True` のときにのみ `related_knowledge_ids` を更新し、`evidence` を `test_pass:<qid>` として付与する。
+- 更新度:
+  - 基礎問題合格 -> `partial`
+  - 応用問題合格（codeでrequired_tokens満足） -> `complete`（または partial→complete の促進条件）
+- ある知識に複数の問題が紐づく場合、合格数に基づく閾値（例: 3 問中 2 問合格で partial、全問合格で complete）を採用可能。
+
+逐次学習フロー（API シーケンス）
+---------------------------
+1. POST `/start_weekly_test` { user_id, unit } -> 新規 session (session_id)
+2. GET `/get_current_question?session_id=` -> 現在の問題
+3. POST `/submit_test_answer` { session_id, qid, answer_text } -> autograde 実行
+   - passed: True -> mark passed, call knowledge update, advance slot
+   - failed: retries-- ; if retries exhausted -> show hint/explanation and move on (運用で設定)
+4. GET `/get_test_status` -> セッション進捗・知識マスタリを返す
+
+UI 向け可視化ペイロード
+------------------
+- { total_slots:17, passed_slots:n, percent:int, current_slot_index, per_slot:[{slot,qid,status,retries_left}], per_knowledge_mastery:[{id,mastery_level,confidence}] }
+- 各回答後にフィードバックフィールドを返す（簡潔な誤り箇所、参考ヒント等）
+
+問題セット（サンプル目次）
+------------------
+以下は各単元の 17 問の概要（slot順）。実際の問題文は JSON に記述する。各小問は qtype を明記。
+
+Unit A: Conditionals (17 問構成例)
+ - Basic (slots 1-5)
+   A1 (slot1, short): 比較演算子（==, !=, <, >）の説明と簡単例
+   A2 (slot2, mc): if/elif/else の構文選択
+   A3 (slot3, short): インデントの重要性を問う
+   A4 (slot4, short): 論理演算子 (and/or/not) の簡単な真偽判定
+   A5 (slot5, short): 組合せ条件の読み取り
+ - Applied (slots 6-17)
+   A6 (slot6, code): 与えられたスコアに応じて成績を出力する関数（code）
+   A7 (slot7, code): 3 種類の数に基づきラベルを返す if/elif/else 実装
+   A8 (slot8, code): 範囲判定のバグ修正（デバッグ問題）
+   A9 (slot9, code): nested if を使った複雑分岐
+   A10 (slot10, code): 論理演算子を組み合わせたフィルタ関数
+   A11 (slot11, code): 入力の検証とエラーハンドリング
+   A12 (slot12, code): 日付や文字列の条件分岐（string-based case）
+   A13 (slot13, code): 複数条件によるカテゴリ分け（実践）
+   A14 (slot14, code): 誤った else の位置を修正するデバッグ
+   A15 (slot15, code): 例外を使った分岐 vs 条件分岐の設計
+   A16 (slot16, code): 論理式の最適化（冗長条件の簡約）
+   A17 (slot17, code): 総合問題（小さいアプリケーション）
+
+Unit B: Loops (17 問構成例)
+ - Basic (slots 1-5)
+   B1: for の基本（short/code）
+   B2: range の使い方（short）
+   B3: while の基本（short）
+   B4: break/continue の挙動（mc/short）
+   B5: enumerate とインデックス操作
+ - Applied (slots 6-17)
+   B6: リストの合計を for で求める（code）
+   B7: 偶数のみカウントする関数（code）
+   B8: インデックス依存の置換（code）
+   B9: リスト内包表記で変換する（code）
+   B10: 入力を受け続ける while ループ（終了条件あり）
+   B11: 無限ループになりがちなコードの修正（debug）
+   B12: ネストループでの配列処理（matrix traversal）
+   B13: パフォーマンス改善（適切なループ使用）
+   B14: ジェネレータを使ったループの応用（optional）
+   B15: ループでのデータ集計（grouping）
+   B16: ループと条件の組合せ問題
+   B17: 総合応用問題（小規模課題）
+
+Unit C: Functions (17 問構成例)
+ - Basic (slots 1-5)
+   C1: 関数定義と呼び出し（short/code）
+   C2: 引数（位置・キーワード）の違い（short）
+   C3: デフォルト引数の注意点（mc/short）
+   C4: return の基本（short）
+   C5: None と戻り値がない関数
+ - Applied (slots 6-17)
+   C6: *args を使った可変長処理（code）
+   C7: **kwargs の利用例（code）
+   C8: 複数戻り値を返す関数（code）
+   C9: 関数の分割と再利用性改善（design）
+   C10: 再帰で階乗を実装（code）
+   C11: 再帰でフィボナッチ（効率改善の議論）
+   C12: 関数の副作用を排除する（純粋関数）
+   C13: 関数内での例外ハンドリング
+   C14: 関数を使った簡単なパイプライン設計（code）
+   C15: ユニットテストのための関数設計
+   C16: (optional) 簡単なクラスメソッドを関数として扱う問題
+   C17: 総合応用問題（複数関数を組み合わせたタスク）
+
+実装コンポーネント
+----------------
+- `python_config.py`: 単元メタデータ、STUDENT_PROMPT_BASE、STUDENT_RESPONSE_TEMPLATE
+- `python_questions_{unit}.json`: 各単元 17 問を保持
+- `learning-ui/weekly_test.py`: セッション管理（start, get_current, submit, status）
+- `learning-ui/autograder.py`: 静的採点ロジック
+- `learning-ui/knowledge_update.py`: question-centric 更新ルール
+- `main.py` の API 拡張
+- `tests/simulate_weekly_test.py`：統合テスト
+
+テストと検証方針
+--------------
+- Unit テスト: autograder, session manager, knowledge updater
+- Integration: 1 単元 17 問のシミュレーション（正答・誤答・再試行パス）
+
+運用・方針の確認事項（決定してほしい点）
+-----------------------------
+1. 再試行上限: デフォルト 2 でよいか？
+2. 失敗上限到達後の flow: 自動で解説を表示し次へ進む（現推奨）でよいか？
+3. code のコピー判定: 完全一致でコピー扱い、類似度閾値は 0.8（Jaccard）で再試行扱いとするか？
+
+実装見積り
+---------
+- 問題テンプレート（1 単元 17 問）作成: 30-60 分
+- weekly_test + API 実装: 2-3 時間
+- autograder 実装: 60-90 分
+- knowledge_update 実装: 30-60 分
+- 統合テスト: 60 分
+合計: MVP 約 6-8 時間（段階的に実施）
+
+ファイル保存先
+-------------
+- この設計書を `designs/python_tutee_design_three_units.txt` に保存しました。
+
+次の作業提案
+-----------
+- 私が「Unit A: Conditionals」の 17 問テンプレートを JSON 形式で作成します。レビュー後、順に Unit B, Unit C を作成します。
+- その後 `weekly_test.py` の最小実装に進めます。
+
+-- ここまで --
